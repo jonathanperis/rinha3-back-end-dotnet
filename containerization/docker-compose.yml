@@ -1,0 +1,53 @@
+services:
+  gateway:
+    build:
+      context: ../src/rinha-gateway
+      dockerfile: Dockerfile
+    image: rinha-gateway
+    container_name: rinha-gateway
+    environment:
+      - ASPNETCORE_URLS=http://0.0.0.0:8080
+      - DB_CONNECTION_STRING=Host=gateway-db;Port=5432;Database=rinha;Username=postgres;Password=postgres;Pooling=true;Minimum Pool Size=10;Maximum Pool Size=50;Connection Pruning Interval=3;Max Auto Prepare=256;Auto Prepare Min Usages=2
+      - PP_DEFAULT_BASEURL=http://payment-processor-default:8080
+      - PP_FALLBACK_BASEURL=http://payment-processor-fallback:8080
+      - HTTP_TIMEOUT_MS=300
+    ports:
+      - "9999:8080"
+    depends_on:
+      - gateway-db
+    networks:
+      - payment-processor
+      - gateway-db-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.9"
+          memory: "100MB"
+
+  gateway-db:
+    image: postgres:17-alpine
+    container_name: rinha-gateway-db
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=rinha
+    volumes:
+      - ../sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - gateway-pg:/var/lib/postgresql/data
+    networks:
+      - gateway-db-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.6"
+          memory: "250MB"
+
+networks:
+  # Must already exist (created by the Payment Processors compose)
+  payment-processor:
+    external: true
+  gateway-db-net:
+    driver: bridge
+
+volumes:
+  gateway-pg:
