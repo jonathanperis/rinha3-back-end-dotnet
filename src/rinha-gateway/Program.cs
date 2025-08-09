@@ -1,8 +1,8 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
 using Npgsql;
-using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,7 +22,7 @@ builder.Services.Configure<JsonOptions>(o =>
     o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
 });
 
-// Npgsql DataSource
+// Npgsql DataSource (AutoPrepare via connection string in Npgsql 9)
 builder.Services.AddNpgsqlDataSource(dbConnectionString);
 
 // Ensure schema
@@ -219,7 +219,7 @@ SELECT default_count, default_amount, fallback_count, fallback_amount FROM agg;"
 
 sealed class ProcessorsHealthState
 {
-    // Volatile is allowed for reference types; each update swaps the reference atomically.
+    // Volatile allowed for reference types; swap snapshot atomically
     private volatile HealthSnapshot _snapshot = new(true, false, 0, false, 0, DateTime.MinValue);
 
     public HealthSnapshot Read() => _snapshot;
@@ -252,7 +252,7 @@ sealed class ProcessorsHealthPoller(ILogger<ProcessorsHealthPoller> logger, IHtt
         var defaultClient = httpFactory.CreateClient("pp-default");
         var fallbackClient = httpFactory.CreateClient("pp-fallback");
 
-        // Initial pessimistic state: assume default healthy, fallback healthy unknown
+        // Initial optimistic state
         state.Update(defaultHealthy: true, defaultMinMs: 0, fallbackHealthy: true, fallbackMinMs: 0);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -309,7 +309,21 @@ public readonly record struct ServiceHealthOut(bool Failing, int MinResponseTime
 
 public readonly record struct SummaryPart(int TotalRequests, decimal TotalAmount);
 
-public readonly record struct PaymentsSummaryOut(SummaryPart @default, SummaryPart fallback);
+// Replaced positional record with named properties to avoid "default" generator bug
+public sealed record class PaymentsSummaryOut
+{
+    [JsonPropertyName("default")]
+    public SummaryPart Default { get; init; }
+
+    [JsonPropertyName("fallback")]
+    public SummaryPart Fallback { get; init; }
+
+    public PaymentsSummaryOut(SummaryPart @default, SummaryPart fallback)
+    {
+        Default = @default;
+        Fallback = fallback;
+    }
+}
 
 [JsonSerializable(typeof(PaymentIn))]
 [JsonSerializable(typeof(ProcessorPaymentIn))]
