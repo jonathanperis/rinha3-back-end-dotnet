@@ -1,11 +1,64 @@
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS build
-WORKDIR /src
-COPY . .
-RUN dotnet restore
-RUN dotnet publish -c Release -o /out
+# Multi-arch NativeAOT build with automatic RID mapping.
+# Local (macOS Apple Silicon) builds arm64; CI can target amd64 via --platform.
 
-FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine
-ENV ASPNETCORE_URLS=http://0.0.0.0:8080
+# Runtime base
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS base
+LABEL maintainer="Jonathan Peris"
+ENV ASPNETCORE_URLS=http://0.0.0.0:8080 \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 WORKDIR /app
-COPY --from=build /out ./
+USER app
+
+# Build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS build
+
+# NativeAOT toolchain on Alpine/musl
+RUN apk add --no-cache clang build-base zlib-dev
+
+ARG BUILD_CONFIGURATION=Release
+ARG AOT=true
+ARG TRIM=true
+# Optional override. If not provided, we map TARGETPLATFORM -> RID.
+ARG RID
+ARG TARGETPLATFORM
+
+WORKDIR /src
+
+# Restore with better caching
+COPY Rinha.Gateway.csproj ./
+RUN dotnet restore "Rinha.Gateway.csproj" \
+    -p:Configuration=$BUILD_CONFIGURATION \
+    -p:PublishAot=$AOT \
+    -p:PublishTrimmed=$TRIM
+
+# Copy remaining sources
+COPY . .
+
+# Publish with auto RID mapping
+RUN set -eux; \
+    if [ -z "${RID:-}" ]; then \
+      case "$TARGETPLATFORM" in \
+        "linux/amd64") RID="linux-musl-x64" ;; \
+        "linux/arm64") RID="linux-musl-arm64" ;; \
+        *) echo "Unsupported TARGETPLATFORM: $TARGETPLATFORM" >&2; exit 1 ;; \
+      esac; \
+    fi; \
+    echo "Using RuntimeIdentifier=$RID"; \
+    dotnet publish "Rinha.Gateway.csproj" \
+      -c $BUILD_CONFIGURATION --no-restore \
+      -p:PublishAot=$AOT \
+      -p:PublishTrimmed=$TRIM \
+      -p:TieredPGO=true \
+      -p:PublishSingleFile=true \
+      -p:SelfContained=true \
+      -p:InvariantGlobalization=true \
+      -p:IlcOptimizationPreference=Speed \
+      -p:RuntimeIdentifier=$RID \
+      -o /app/publish
+
+# Final image
+FROM --platform=$BUILDPLATFORM base AS final
+WORKDIR /app
+EXPOSE 8080
+COPY --from=build /app/publish ./
 ENTRYPOINT ["./Rinha.Gateway"]
