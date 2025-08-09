@@ -6,7 +6,6 @@ GET http://localhost:{{port}}/healthz
 ### Create payment
 POST http://localhost:{{port}}/payments
 Content-Type: application/json
-
 {
   "correlationId": "{{$guid}}",
   "amount": 19.90
