@@ -186,25 +186,24 @@ sealed class PaymentsRepository(NpgsqlDataSource ds)
     public async Task<PaymentsSummaryOut> GetSummaryAsync(DateTime? from, DateTime? to, CancellationToken ct = default)
     {
         await using var cmd = ds.CreateCommand(@"
-        WITH q AS (
-        SELECT processor, amount
+        SELECT
+        COUNT(*) FILTER (WHERE processor = 0)                               AS default_count,
+        COALESCE(SUM(amount) FILTER (WHERE processor = 0), 0)               AS default_amount,
+        COUNT(*) FILTER (WHERE processor = 1)                               AS fallback_count,
+        COALESCE(SUM(amount) FILTER (WHERE processor = 1), 0)               AS fallback_amount
         FROM processed_payments
         WHERE (@from IS NULL OR requested_at >= @from)
-            AND (@to   IS NULL OR requested_at <= @to)
-        ),
-        agg AS (
-        SELECT
-            SUM(CASE WHEN processor = 0 THEN 1 ELSE 0 END)::int AS default_count,
-            COALESCE(SUM(CASE WHEN processor = 0 THEN amount ELSE 0 END), 0) AS default_amount,
-            SUM(CASE WHEN processor = 1 THEN 1 ELSE 0 END)::int AS fallback_count,
-            COALESCE(SUM(CASE WHEN processor = 1 THEN amount ELSE 0 END), 0) AS fallback_amount
-        FROM q
-        )
-        SELECT default_count, default_amount, fallback_count, fallback_amount FROM agg;");
-        cmd.Parameters.AddWithValue("from", from.HasValue ? from.Value : DBNull.Value);
-        cmd.Parameters.AddWithValue("to", to.HasValue ? to.Value : DBNull.Value);
+        AND (@to   IS NULL OR requested_at <= @to);");
+
+        // Bind with explicit types to handle nulls cleanly
+        var pFrom = cmd.Parameters.Add("from", NpgsqlTypes.NpgsqlDbType.TimestampTz);
+        pFrom.Value = (object?)from ?? DBNull.Value;
+        var pTo = cmd.Parameters.Add("to", NpgsqlTypes.NpgsqlDbType.TimestampTz);
+        pTo.Value = (object?)to ?? DBNull.Value;
+
         await using var rdr = await cmd.ExecuteReaderAsync(ct);
         await rdr.ReadAsync(ct);
+
         var defCount = rdr.GetInt32(0);
         var defAmount = rdr.GetDecimal(1);
         var fbCount = rdr.GetInt32(2);
