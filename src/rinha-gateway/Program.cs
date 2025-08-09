@@ -20,6 +20,7 @@ builder.Services.Configure<JsonOptions>(o =>
 {
     o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
+    o.SerializerOptions.TypeInfoResolverChain.Add(AppJsonSerializerContext.Default);
 });
 
 // Npgsql DataSource (AutoPrepare via connection string in Npgsql 9)
@@ -131,8 +132,8 @@ app.MapGet("/payments-summary", async (DateTime? from, DateTime? to, PaymentsRep
 })
 .WithName("PaymentsSummary");
 
-// Simple liveness
-app.MapGet("/healthz", () => Results.Ok("ok"));
+// Simple liveness (serve plain text; avoid JSON serialization)
+app.MapGet("/healthz", () => Results.Text("ok", "text/plain"));
 
 app.Run();
 
@@ -309,7 +310,7 @@ public readonly record struct ServiceHealthOut(bool Failing, int MinResponseTime
 
 public readonly record struct SummaryPart(int TotalRequests, decimal TotalAmount);
 
-// Replaced positional record with named properties to avoid "default" generator bug
+// Avoid source-gen bug on property named "default"
 public sealed record class PaymentsSummaryOut
 {
     [JsonPropertyName("default")]
