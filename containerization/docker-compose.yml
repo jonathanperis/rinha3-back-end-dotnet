@@ -1,24 +1,14 @@
 name: 'rinha3-back-end-dotnet'
 
 x-gateway-common: &gateway-common
-  build:
-    context: ../src/rinha-gateway
-    dockerfile: Dockerfile
-    args:
-      BUILD_CONFIGURATION: Release
-      AOT: "true"
-      TRIM: "true"
-      # RID not set here; Dockerfile auto-maps TARGETPLATFORM to linux-musl-arm64 locally
   image: rinha-gateway:local
+  pull_policy: never
   environment:
     - ASPNETCORE_URLS=http://0.0.0.0:8080
     - PP_DEFAULT_BASEURL=http://payment-processor-default:8080
     - PP_FALLBACK_BASEURL=http://payment-processor-fallback:8080
     - HTTP_TIMEOUT_MS=300
-    # Use Postgres via Unix socket for lower overhead
     - DB_CONNECTION_STRING=Host=/var/run/postgresql;Port=5432;Database=rinha;Username=postgres;Password=postgres;Minimum Pool Size=10;Maximum Pool Size=30;Connection Pruning Interval=3;Max Auto Prepare=256;Auto Prepare Min Usages=2;No Reset On Close=true
-  depends_on:
-    - gateway-db
   networks:
     - app-net
     - payment-processor
@@ -51,18 +41,33 @@ services:
           cpus: "0.05"
           memory: "16MB"
 
-  # Two gateway instances
+  # Gateway instance 1 builds the image
   gateway-1:
     <<: *gateway-common
     container_name: rinha-gateway-1
     hostname: rinha-gateway-1
+    build:
+      context: ../src/rinha-gateway
+      dockerfile: Dockerfile
+      args:
+        BUILD_CONFIGURATION: Release
+        AOT: "true"
+        TRIM: "true"
+    depends_on:
+      gateway-db:
+        condition: service_started
 
+  # Gateway instance 2 reuses the same local image
   gateway-2:
     <<: *gateway-common
     container_name: rinha-gateway-2
     hostname: rinha-gateway-2
+    # No build here; uses image rinha-gateway:local
+    depends_on:
+      gateway-db:
+        condition: service_started
 
-  # Postgres for audit/summary consistency (low memory profile + socket)
+  # Postgres for audit/summary consistency (low memory + socket)
   gateway-db:
     image: postgres:17-alpine
     container_name: rinha-gateway-db

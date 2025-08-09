@@ -2,10 +2,11 @@
 # Local (Apple Silicon) builds ARM64; CI can target AMD64 via --platform.
 
 # Runtime base
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS base
+FROM --platform=$TARGETPLATFORM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS base
 LABEL maintainer="Jonathan Peris"
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080 \
-    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1
 WORKDIR /app
 USER app
 
@@ -22,9 +23,12 @@ ARG TRIM=true
 ARG RID
 ARG TARGETPLATFORM
 
+# Keep nuget cache in layer
+ENV NUGET_PACKAGES=/root/.nuget/packages
+
 WORKDIR /src
 
-# Determine RID early and persist it for later steps (restore + publish must match)
+# Determine RID early and persist it (restore + publish must match)
 RUN set -eux; \
     if [ -z "${RID:-}" ]; then \
       case "$TARGETPLATFORM" in \
@@ -36,7 +40,7 @@ RUN set -eux; \
     echo "Using RuntimeIdentifier=$RID"; \
     echo "$RID" > /tmp/rid
 
-# Restore with RID for correct assets graph (fixes NETSDK1047)
+# Restore with RID for correct assets graph (fixes NETSDK1047/1064)
 # Copy only the project file first to maximize layer caching
 COPY Rinha.Gateway.csproj ./
 RUN dotnet restore "Rinha.Gateway.csproj" \
@@ -48,9 +52,9 @@ RUN dotnet restore "Rinha.Gateway.csproj" \
 # Copy remaining sources
 COPY . .
 
-# Publish (RID must match restore)
+# Publish (perform restore again to avoid rare partial-cache issues)
 RUN dotnet publish "Rinha.Gateway.csproj" \
-      -c $BUILD_CONFIGURATION --no-restore \
+      -c $BUILD_CONFIGURATION \
       -p:PublishAot=$AOT \
       -p:PublishTrimmed=$TRIM \
       -p:TieredPGO=true \
@@ -62,7 +66,7 @@ RUN dotnet publish "Rinha.Gateway.csproj" \
       -o /app/publish
 
 # Final image
-FROM --platform=$BUILDPLATFORM base AS final
+FROM --platform=$TARGETPLATFORM base AS final
 WORKDIR /app
 EXPOSE 8080
 COPY --from=build /app/publish ./
