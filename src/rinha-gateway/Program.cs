@@ -143,16 +143,16 @@ sealed class DbSchemaInitializer(NpgsqlDataSource ds, ILogger<DbSchemaInitialize
     public async Task StartAsync(CancellationToken ct)
     {
         await using var cmd = ds.CreateCommand(@"
-CREATE TABLE IF NOT EXISTS processed_payments (
-    correlation_id UUID PRIMARY KEY,
-    amount NUMERIC NOT NULL,
-    requested_at TIMESTAMPTZ NOT NULL,
-    processor SMALLINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS ix_processed_payments_requested_at ON processed_payments (requested_at);
-CREATE INDEX IF NOT EXISTS ix_processed_payments_processor ON processed_payments (processor);
-");
+        CREATE TABLE IF NOT EXISTS processed_payments (
+            correlation_id UUID PRIMARY KEY,
+            amount NUMERIC NOT NULL,
+            requested_at TIMESTAMPTZ NOT NULL,
+            processor SMALLINT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS ix_processed_payments_requested_at ON processed_payments (requested_at);
+        CREATE INDEX IF NOT EXISTS ix_processed_payments_processor ON processed_payments (processor);
+        ");
         await cmd.ExecuteNonQueryAsync(ct);
         logger.LogInformation("Schema ensured");
     }
@@ -173,8 +173,8 @@ sealed class PaymentsRepository(NpgsqlDataSource ds)
     public async Task InsertAsync(Guid id, decimal amount, DateTime requestedAtUtc, ProcessorTarget target, CancellationToken ct = default)
     {
         await using var cmd = ds.CreateCommand(@"
-INSERT INTO processed_payments (correlation_id, amount, requested_at, processor)
-VALUES (@id, @amount, @requested_at, @processor);");
+        INSERT INTO processed_payments (correlation_id, amount, requested_at, processor)
+        VALUES (@id, @amount, @requested_at, @processor);");
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("amount", decimal.Round(amount, 2));
         cmd.Parameters.AddWithValue("requested_at", requestedAtUtc);
@@ -185,21 +185,21 @@ VALUES (@id, @amount, @requested_at, @processor);");
     public async Task<PaymentsSummaryOut> GetSummaryAsync(DateTime? from, DateTime? to, CancellationToken ct = default)
     {
         await using var cmd = ds.CreateCommand(@"
-WITH q AS (
-  SELECT processor, amount
-  FROM processed_payments
-  WHERE (@from IS NULL OR requested_at >= @from)
-    AND (@to   IS NULL OR requested_at <= @to)
-),
-agg AS (
-  SELECT
-    SUM(CASE WHEN processor = 0 THEN 1 ELSE 0 END)::int AS default_count,
-    COALESCE(SUM(CASE WHEN processor = 0 THEN amount ELSE 0 END), 0) AS default_amount,
-    SUM(CASE WHEN processor = 1 THEN 1 ELSE 0 END)::int AS fallback_count,
-    COALESCE(SUM(CASE WHEN processor = 1 THEN amount ELSE 0 END), 0) AS fallback_amount
-  FROM q
-)
-SELECT default_count, default_amount, fallback_count, fallback_amount FROM agg;");
+        WITH q AS (
+        SELECT processor, amount
+        FROM processed_payments
+        WHERE (@from IS NULL OR requested_at >= @from)
+            AND (@to   IS NULL OR requested_at <= @to)
+        ),
+        agg AS (
+        SELECT
+            SUM(CASE WHEN processor = 0 THEN 1 ELSE 0 END)::int AS default_count,
+            COALESCE(SUM(CASE WHEN processor = 0 THEN amount ELSE 0 END), 0) AS default_amount,
+            SUM(CASE WHEN processor = 1 THEN 1 ELSE 0 END)::int AS fallback_count,
+            COALESCE(SUM(CASE WHEN processor = 1 THEN amount ELSE 0 END), 0) AS fallback_amount
+        FROM q
+        )
+        SELECT default_count, default_amount, fallback_count, fallback_amount FROM agg;");
         cmd.Parameters.AddWithValue("from", from.HasValue ? from.Value : DBNull.Value);
         cmd.Parameters.AddWithValue("to", to.HasValue ? to.Value : DBNull.Value);
         await using var rdr = await cmd.ExecuteReaderAsync(ct);

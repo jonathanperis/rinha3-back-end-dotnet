@@ -1,5 +1,5 @@
 # Multi-arch NativeAOT build with automatic RID mapping.
-# Local (macOS Apple Silicon) builds arm64; CI can target amd64 via --platform.
+# Local (Apple Silicon) builds ARM64; CI can target AMD64 via --platform.
 
 # Runtime base
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS base
@@ -18,23 +18,13 @@ RUN apk add --no-cache clang build-base zlib-dev
 ARG BUILD_CONFIGURATION=Release
 ARG AOT=true
 ARG TRIM=true
-# Optional override. If not provided, we map TARGETPLATFORM -> RID.
+# Optional override; if not set we map TARGETPLATFORM -> RID
 ARG RID
 ARG TARGETPLATFORM
 
 WORKDIR /src
 
-# Restore with better caching
-COPY Rinha.Gateway.csproj ./
-RUN dotnet restore "Rinha.Gateway.csproj" \
-    -p:Configuration=$BUILD_CONFIGURATION \
-    -p:PublishAot=$AOT \
-    -p:PublishTrimmed=$TRIM
-
-# Copy remaining sources
-COPY . .
-
-# Publish with auto RID mapping
+# Determine RID early and persist it for later steps (restore + publish must match)
 RUN set -eux; \
     if [ -z "${RID:-}" ]; then \
       case "$TARGETPLATFORM" in \
@@ -44,7 +34,22 @@ RUN set -eux; \
       esac; \
     fi; \
     echo "Using RuntimeIdentifier=$RID"; \
-    dotnet publish "Rinha.Gateway.csproj" \
+    echo "$RID" > /tmp/rid
+
+# Restore with RID for correct assets graph (fixes NETSDK1047)
+# Copy only the project file first to maximize layer caching
+COPY Rinha.Gateway.csproj ./
+RUN dotnet restore "Rinha.Gateway.csproj" \
+    -r $(cat /tmp/rid) \
+    -p:Configuration=$BUILD_CONFIGURATION \
+    -p:PublishAot=$AOT \
+    -p:PublishTrimmed=$TRIM
+
+# Copy remaining sources
+COPY . .
+
+# Publish (RID must match restore)
+RUN dotnet publish "Rinha.Gateway.csproj" \
       -c $BUILD_CONFIGURATION --no-restore \
       -p:PublishAot=$AOT \
       -p:PublishTrimmed=$TRIM \
@@ -53,7 +58,7 @@ RUN set -eux; \
       -p:SelfContained=true \
       -p:InvariantGlobalization=true \
       -p:IlcOptimizationPreference=Speed \
-      -p:RuntimeIdentifier=$RID \
+      -r $(cat /tmp/rid) \
       -o /app/publish
 
 # Final image
